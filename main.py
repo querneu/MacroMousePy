@@ -26,6 +26,24 @@ def data_path(filename):
     os.makedirs(macros_dir, exist_ok=True)
     return os.path.join(macros_dir, filename)
 
+def key_to_str(key):
+    """Converte um objeto de tecla do pynput para uma string serializável."""
+    if isinstance(key, keyboard.Key):
+        return key.name
+    elif isinstance(key, keyboard.KeyCode):
+        return key.char
+    return str(key)
+
+def str_to_key(key_str):
+    """Converte uma string de volta para um objeto de tecla do pynput."""
+    if len(key_str) == 1:
+        return keyboard.KeyCode.from_char(key_str)
+    try:
+        return keyboard.Key[key_str]
+    except KeyError:
+        # Caso a tecla não seja encontrada, retorna a string para ser usada com type
+        return key_str
+
 # --- Lógica de Gravação ---
 
 def on_move(x, y):
@@ -40,6 +58,19 @@ def on_scroll(x, y, dx, dy):
     if recording:
         actions.append({"type": "scroll", "pos": (x, y), "dx": dx, "dy": dy, "time": time.time()})
 
+def on_record_press(key):
+    """Callback para pressionar tecla durante a gravação."""
+    if key == keyboard.Key.f8:
+        stop_recording_or_playing()
+        return False # Para o listener
+    if recording:
+        actions.append({"type": "key_press", "key": key_to_str(key), "time": time.time()})
+
+def on_record_release(key):
+    """Callback para soltar tecla durante a gravação."""
+    if key != keyboard.Key.f8 and key != keyboard.Key.f9 and recording:
+        actions.append({"type": "key_release", "key": key_to_str(key), "time": time.time()})
+
 def stop_recording_or_playing():
     global recording
     global playing
@@ -47,18 +78,11 @@ def stop_recording_or_playing():
     playing = False
     stop_thread.set() # Sinaliza para a thread de reprodução parar
 
-def on_key_press(key):
+def on_playback_hotkey(key):
     """Listener de teclado para F8 (parar) e F9 (abortar)"""
-    if key == keyboard.Key.f8 and recording:
-        stop_recording_or_playing()
-        return False # Para o listener de gravação
     if key == keyboard.Key.f9 and playing:
         stop_recording_or_playing()
         return False # Para o listener de reprodução
-
-def start_keyboard_listener():
-    with keyboard.Listener(on_press=on_key_press) as listener:
-        listener.join()
 
 # --- Lógica de Reprodução ---
 
@@ -66,6 +90,7 @@ def play_macro_thread(file_path, loop_count):
     """Função que executa a reprodução em uma thread separada."""
     global playing
     from pynput.mouse import Controller, Button
+    from pynput.keyboard import Controller as KeyboardController
 
     with open(file_path, "r", encoding="utf-8") as f:
         recorded = json.load(f)
@@ -75,12 +100,16 @@ def play_macro_thread(file_path, loop_count):
         return
 
     m = Controller()
+    k = KeyboardController()
     playing = True
     stop_thread.clear()
 
     # Inicia listener para F9 em uma thread separada
-    key_listener_thread = threading.Thread(target=start_keyboard_listener, daemon=True)
-    key_listener_thread.start()
+    def start_hotkey_listener():
+        with keyboard.Listener(on_press=on_playback_hotkey) as listener:
+            listener.join()
+    hotkey_thread = threading.Thread(target=start_hotkey_listener, daemon=True)
+    hotkey_thread.start()
 
     loops_done = 0
     is_infinite = loop_count == 0
@@ -107,6 +136,13 @@ def play_macro_thread(file_path, loop_count):
                     m.release(btn)
             elif action["type"] == "scroll":
                 m.scroll(action.get("dx", 0), action.get("dy", 0))
+            elif action["type"] == "key_press":
+                key = str_to_key(action["key"])
+                k.press(key)
+            elif action["type"] == "key_release":
+                key = str_to_key(action["key"])
+                k.release(key)
+
         loops_done += 1
 
     playing = False
@@ -154,8 +190,8 @@ class MacroApp:
         """Cria uma janela 'marca d'água' para indicar a gravação."""
         self.recording_window = tk.Toplevel(self.root)
         self.recording_window.overrideredirect(True) # Sem bordas
-        self.recording_window.attributes('-topmost', True) # Sempre no topo
-        self.recording_window.attributes('-alpha', 0.6) # Transparente
+        self.recording_window.attributes('-topmost', True)
+        self.recording_window.attributes('-alpha', 0.6)
 
         label = tk.Label(self.recording_window, text="🔴 Gravando... (Pressione F8 para parar)",
                          bg="black", fg="white", font=("Segoe UI", 10))
@@ -177,20 +213,22 @@ class MacroApp:
         self.show_recording_indicator()
 
         # Inicia listeners em threads para não bloquear a UI
-        key_thread = threading.Thread(target=start_keyboard_listener, daemon=True)
         mouse_listener = mouse.Listener(on_move=on_move, on_click=on_click, on_scroll=on_scroll)
+        keyboard_listener = keyboard.Listener(on_press=on_record_press, on_release=on_record_release)
 
-        key_thread.start()
         mouse_listener.start()
+        keyboard_listener.start()
 
         # Espera a gravação terminar
-        self.root.after(100, self.check_recording_status, mouse_listener)
+        self.root.after(100, self.check_recording_status, mouse_listener, keyboard_listener)
 
-    def check_recording_status(self, mouse_listener):
+    def check_recording_status(self, mouse_listener, keyboard_listener):
         if recording:
-            self.root.after(100, self.check_recording_status, mouse_listener)
+            self.root.after(100, self.check_recording_status, mouse_listener, keyboard_listener)
         else:
             mouse_listener.stop()
+            # O listener de teclado já para sozinho ao retornar False
+
             if self.recording_window:
                 self.recording_window.destroy()
                 self.recording_window = None
