@@ -155,7 +155,7 @@ class MacroApp:
         self.recording_window = tk.Toplevel(self.root)
         self.recording_window.overrideredirect(True) # Sem bordas
         self.recording_window.attributes('-topmost', True) # Sempre no topo
-        self.recording_window.attributes('-alpha', 0.7) # Transparente
+        self.recording_window.attributes('-alpha', 0.6) # Transparente
 
         label = tk.Label(self.recording_window, text="🔴 Gravando... (Pressione F8 para parar)",
                          bg="black", fg="white", font=("Segoe UI", 10))
@@ -234,8 +234,8 @@ class MacroApp:
             return
 
         loops_str = simpledialog.askstring(
-            "Repetir Macro",
-            "Quantas vezes repetir a macro?\n(Digite 0 para repetir infinitamente até F9 ser pressionado)",
+            "Repetir Gravação",
+            "Quantas vezes repetir a gravação?\n(Digite 0 para repetir infinitamente até F9 ser pressionado)",
             parent=self.root
         )
 
